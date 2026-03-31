@@ -18,6 +18,24 @@ def category_picker(categories: list[dict], action: str) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(rows)
 
 
+def item_suggestions(suggestions: list[str], category_id: int) -> InlineKeyboardMarkup:
+    """Show suggestion buttons (2 per row) + custom type + cancel."""
+    rows = []
+    # Two suggestions per row
+    for i in range(0, len(suggestions), 2):
+        row = []
+        for suggestion in suggestions[i:i+2]:
+            row.append(InlineKeyboardButton(
+                suggestion,
+                callback_data=f"suggest:{category_id}:{suggestion}"
+            ))
+        rows.append(row)
+    # Custom type + cancel
+    rows.append([InlineKeyboardButton("✏️ הקלד בעצמך", callback_data=f"custom_type:{category_id}")])
+    rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
 def items_list_for_removal(items: list[dict], action: str) -> InlineKeyboardMarkup:
     rows = []
     for item in items:

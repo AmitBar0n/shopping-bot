@@ -12,6 +12,7 @@ from config import AUTHORIZED_IDS, NAMES
 import database as db
 import keyboards as kb
 import notifications as notif
+from suggestions import get_suggestions
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,58 @@ async def category_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data["selected_category_id"] = cat_id
     context.user_data["selected_category_name"] = cat["name"]
     context.user_data["selected_category_emoji"] = cat["emoji"]
-    await query.edit_message_text(f"כתוב את שם הפריט עבור {cat['emoji']} {cat['name']}:")
+
+    suggestions = get_suggestions(cat["name"])
+    if suggestions:
+        await query.edit_message_text(
+            f"בחר פריט ל-{cat['emoji']} {cat['name']}:",
+            reply_markup=kb.item_suggestions(suggestions, cat_id),
+        )
+    else:
+        await query.edit_message_text(f"כתוב את שם הפריט עבור {cat['emoji']} {cat['name']}:")
+    return AWAITING_ITEM_NAME
+
+
+async def suggestion_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User tapped a suggestion button."""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":", 2)  # suggest:cat_id:item_name
+    cat_id = int(parts[1])
+    item_name = parts[2]
+
+    categories = await db.get_all_categories()
+    cat = next((c for c in categories if c["id"] == cat_id), None)
+    cat_name = cat["name"] if cat else ""
+    cat_emoji = cat["emoji"] if cat else ""
+    user_name = get_user_name(update.effective_user.id)
+
+    try:
+        await db.add_item(cat_id, item_name, user_name)
+    except db.DuplicateItemError:
+        await query.edit_message_text(
+            f"'{item_name}' כבר ברשימה תחת {cat_emoji} {cat_name}!",
+            reply_markup=kb.main_menu(),
+        )
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        f"✅ {item_name} נוסף ל-{cat_emoji} {cat_name}!", reply_markup=kb.main_menu()
+    )
+    await notif.notify_other(
+        update.get_bot(), update.effective_user.id,
+        f"{user_name} הוסיף/ה: {item_name} ({cat_emoji} {cat_name})",
+    )
+    return ConversationHandler.END
+
+
+async def custom_type_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User clicked 'הקלד בעצמך'."""
+    query = update.callback_query
+    await query.answer()
+    cat_emoji = context.user_data.get("selected_category_emoji", "")
+    cat_name = context.user_data.get("selected_category_name", "")
+    await query.edit_message_text(f"כתוב את שם הפריט עבור {cat_emoji} {cat_name}:")
     return AWAITING_ITEM_NAME
 
 
@@ -249,6 +301,8 @@ def add_item_conversation() -> ConversationHandler:
         states={
             AWAITING_ITEM_NAME: [
                 CallbackQueryHandler(category_picked, pattern="^pick_cat:"),
+                CallbackQueryHandler(suggestion_picked, pattern="^suggest:"),
+                CallbackQueryHandler(custom_type_start, pattern="^custom_type:"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, item_name_received),
             ],
         },
