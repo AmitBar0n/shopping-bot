@@ -9,6 +9,18 @@ def main_menu() -> InlineKeyboardMarkup:
     ])
 
 
+def list_menu() -> InlineKeyboardMarkup:
+    """Menu shown below the shopping list."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ סמן כנקנה", callback_data="done_start"),
+            InlineKeyboardButton("🗑️ מחק פריט", callback_data="delete_start"),
+        ],
+        [InlineKeyboardButton("➕ הוסף פריט", callback_data="add_item_start")],
+        [InlineKeyboardButton("🔙 תפריט ראשי", callback_data="back_to_main")],
+    ])
+
+
 def category_picker(categories: list[dict], action: str) -> InlineKeyboardMarkup:
     rows = []
     for cat in categories:
@@ -21,7 +33,6 @@ def category_picker(categories: list[dict], action: str) -> InlineKeyboardMarkup
 def item_suggestions(suggestions: list[str], category_id: int) -> InlineKeyboardMarkup:
     """Show suggestion buttons (2 per row) + custom type + cancel."""
     rows = []
-    # Two suggestions per row
     for i in range(0, len(suggestions), 2):
         row = []
         for suggestion in suggestions[i:i+2]:
@@ -30,7 +41,6 @@ def item_suggestions(suggestions: list[str], category_id: int) -> InlineKeyboard
                 callback_data=f"suggest:{category_id}:{suggestion}"
             ))
         rows.append(row)
-    # Custom type + cancel
     rows.append([InlineKeyboardButton("✏️ הקלד בעצמך", callback_data=f"custom_type:{category_id}")])
     rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel")])
     return InlineKeyboardMarkup(rows)

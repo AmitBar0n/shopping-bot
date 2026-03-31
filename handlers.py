@@ -65,7 +65,7 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.edit_message_text(
         "\n".join(lines),
         parse_mode="Markdown",
-        reply_markup=kb.main_menu(),
+        reply_markup=kb.list_menu(),
     )
 
 
@@ -106,10 +106,9 @@ async def category_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def suggestion_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """User tapped a suggestion button."""
     query = update.callback_query
     await query.answer()
-    parts = query.data.split(":", 2)  # suggest:cat_id:item_name
+    parts = query.data.split(":", 2)
     cat_id = int(parts[1])
     item_name = parts[2]
 
@@ -139,7 +138,6 @@ async def suggestion_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def custom_type_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """User clicked 'הקלד בעצמך'."""
     query = update.callback_query
     await query.answer()
     cat_emoji = context.user_data.get("selected_category_emoji", "")
