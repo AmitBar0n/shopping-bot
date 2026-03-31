@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 
@@ -13,8 +12,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def post_init(app: Application) -> None:
+    await init_db()
+    logger.info("Database ready.")
+
+
 def build_app() -> Application:
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", h.start))
     app.add_handler(CallbackQueryHandler(h.show_list, pattern="^show_list$"))
@@ -37,13 +41,6 @@ def build_app() -> Application:
     return app
 
 
-async def main() -> None:
-    await init_db()
-    logger.info("Database ready.")
-    app = build_app()
-    logger.info("Bot starting...")
-    await app.run_polling(allowed_updates=["message", "callback_query"])
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    logger.info("Bot starting...")
+    build_app().run_polling(allowed_updates=["message", "callback_query"])
