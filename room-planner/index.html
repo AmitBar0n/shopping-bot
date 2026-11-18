@@ -277,6 +277,14 @@ details.cat .catalog{padding-bottom:10px}
     <div class="btnrow" style="justify-content:flex-end;margin-top:14px"><button id="mSkip">Skip – I'll draw the walls myself</button></div>
   </div>
 </div>
+<div class="modal-bg" id="askModal" role="dialog" aria-modal="true" aria-labelledby="askTitle">
+  <div class="modal" style="max-width:420px">
+    <h2 id="askTitle" style="font-size:17px"></h2>
+    <p class="muted" id="askText" style="margin:6px 0 12px"></p>
+    <div class="field" id="askInpWrap"><div class="inp"><input type="number" id="askInput" step="any"><span class="u" id="askUnit"></span></div></div>
+    <div class="btnrow" style="justify-content:flex-end;margin-top:14px"><button id="askCancel">Cancel</button><button class="primary" id="askOk">OK</button></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -302,10 +310,12 @@ const CFG = Object.assign({
   products: [],            // [{id,name,category,w,d,h (cm),color,model:'url.glb',elev}]
   hideDefaultCatalog: false,
   showStartScreen: true,
+  allowDownloads: true,    // false hides Save file / Image (for hosts that block downloads)
   catalogUrl: null,        // optional: 'catalog.json' or 'catalog.csv' (one row per product, see README)
   currency: null,          // e.g. 'ILS', 'USD', 'EUR' - shows prices and a room total
 }, window.ROOMFIT_CONFIG || {});
 document.getElementById('brandTitle').textContent = CFG.title;
+if (!CFG.allowDownloads) { document.getElementById('btnExport').hidden = true; document.getElementById('btnShot').hidden = true; }
 if (CFG.accent) document.documentElement.style.setProperty('--accent', CFG.accent);
 
 /* ============================================================
@@ -323,6 +333,17 @@ const fromU = v => (+v) / U().f;
 const fmt = m => toU(m) + ' ' + U().s;
 let toastT;
 function toast(msg, ms = 3200) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms); }
+// in-page replacement for prompt()/confirm() (those are blocked inside sandboxed iframes)
+function ask({ title, text = '', input = null, unit = '', ok = 'OK' }) {
+  return new Promise(res => {
+    const m = $('#askModal'), inp = $('#askInput'); $('#askTitle').textContent = title; $('#askText').textContent = text; $('#askOk').textContent = ok;
+    $('#askInpWrap').hidden = input === null; $('#askUnit').textContent = unit; if (input !== null) inp.value = input;
+    m.classList.add('show'); setTimeout(() => (input !== null ? inp : $('#askOk')).focus(), 30);
+    const done = v => { m.classList.remove('show'); $('#askOk').onclick = $('#askCancel').onclick = m.onkeydown = null; res(v); };
+    $('#askOk').onclick = () => done(input !== null ? inp.value : true); $('#askCancel').onclick = () => done(input !== null ? null : false);
+    m.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#askOk').click(); } if (e.key === 'Escape') { e.preventDefault(); $('#askCancel').click(); } e.stopPropagation(); };
+  });
+}
 function download(name, url) { const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -1139,8 +1160,8 @@ function typedLength() {
 }
 function finishCalibrate() {
   const { a, b } = P.cal; const meas = Math.hypot(b.x - a.x, b.y - a.y); if (meas < 1e-4) { P.cal = null; return; }
-  setTimeout(() => {
-    const v = prompt(`How long is this distance in reality (${U().s})?`, String(toU(meas)));
+  setTimeout(async () => {
+    const v = await ask({ title: 'Set the scale', text: 'How long is the distance you just marked, in reality? (Look for a size written on the plan.)', input: toU(meas), unit: U().s, ok: 'Set scale' });
     const real = fromU(parseFloat(v)); P.cal = null;
     if (!(real > 0)) { drawPlan(); return; }
     pushUndo(); const k = real / meas, g = state.bg;
@@ -1195,10 +1216,10 @@ function renderBlueprintPanel() {
   let cur = steps.findIndex(s => !s[1]);
   $('#bpSteps').innerHTML = steps.map((s, i) => `<li class="${s[1] ? 'done' : i === cur ? 'cur' : ''}">${s[1] ? '✓ ' : ''}${s[0]}</li>`).join('');
 }
-function detectWalls() {
+async function detectWalls() {
   if (!bgImg || !state.bg) return; const g = state.bg;
-  if (!g.calibrated && !confirm('The scale is not set yet, so wall sizes will be wrong. Detect anyway?')) return;
-  if (state.walls.length && !confirm('Replace the existing walls with detected ones?')) return;
+  if (!g.calibrated && !(await ask({ title: 'Scale not set yet', text: 'Wall sizes will be wrong until you set the scale. Detect anyway?', ok: 'Detect anyway' }))) return;
+  if (state.walls.length && !(await ask({ title: 'Replace walls?', text: 'The existing walls will be replaced with the detected ones.', ok: 'Replace' }))) return;
   const maxD = 1400, k = Math.min(1, maxD / Math.max(g.w, g.h)), W = Math.round(g.w * k), H = Math.round(g.h * k);
   const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.drawImage(bgImg, 0, 0, W, H);
   const data = x.getImageData(0, 0, W, H).data, thr = +$('#bpThresh').value; let m = new Uint8Array(W * H);
@@ -1505,9 +1526,9 @@ $('#btnFit').onclick = fitPlan;
 $('#btnZoomIn').onclick = () => { const r = cv.getBoundingClientRect(); zoomAt(1.25, r.width / 2, r.height / 2); };
 $('#btnZoomOut').onclick = () => { const r = cv.getBoundingClientRect(); zoomAt(0.8, r.width / 2, r.height / 2); };
 $('#btnUndo').onclick = undo; $('#btnRedo').onclick = redo;
-$('#btnRect').onclick = () => { const W = fromU($('#rW').value), L = fromU($('#rL').value), H = fromU($('#rH').value), T = fromU($('#rT').value);
+$('#btnRect').onclick = async () => { const W = fromU($('#rW').value), L = fromU($('#rL').value), H = fromU($('#rH').value), T = fromU($('#rT').value);
   if (!(W > 0.3 && L > 0.3 && H > 1 && T > 0.01)) return toast('Please enter a valid width, length, height and wall thickness.');
-  if (state.walls.length && !confirm('Replace the current walls with a new rectangular room? Furniture is kept.')) return; createRect(W, L, H, T); toast('Room created. Select a wall to add doors and windows, or use the Door / Window tools.', 5000); };
+  if (state.walls.length && !(await ask({ title: 'New room?', text: 'The current walls, doors and windows are replaced by a new rectangular room. Furniture is kept.', ok: 'Create room' }))) return; createRect(W, L, H, T); toast('Room created. Select a wall to add doors and windows, or use the Door / Window tools.', 5000); };
 $('#btnUpload').onclick = () => $('#fileBlueprint').click();
 $('#fileBlueprint').onchange = e => { const f = e.target.files[0]; if (f) importBlueprint(f); e.target.value = ''; };
 $('#bpOpacity').oninput = e => { if (state.bg) { state.bg.opacity = +e.target.value; drawPlan(); save(); } };
@@ -1543,6 +1564,7 @@ function syncSettingsUI() {
 }
 
 window.addEventListener('keydown', e => {
+  if ($('#askModal').classList.contains('show')) return;
   const tag = (e.target.tagName || '').toLowerCase(); const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
   const k = e.key.toLowerCase();
   if (camMode === 'walk' && !typing && ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k) && !$('#stage').classList.contains('m-plan')) { walk.keys.add(k); if (k.startsWith('arrow')) e.preventDefault(); if (k !== 'shift') return; }
