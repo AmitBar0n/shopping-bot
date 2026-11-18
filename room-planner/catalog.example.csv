@@ -1,0 +1,6 @@
+id,name,category,type,model,w,d,h,color,elev,price,url,thumb,tags,sku
+oslo-sofa-3,Oslo sofa 3-seat,Sofas,sofa,,228,96,84,#6f7f8f,,4290,https://example.com/products/oslo-sofa,,grey;fabric;3 seat,SF-1001
+oslo-sofa-2,Oslo sofa 2-seat,Sofas,sofa,,176,96,84,#6f7f8f,,3490,https://example.com/products/oslo-sofa-2,,grey;fabric,SF-1002
+nordic-table,Nordic dining table,Tables,table,,200,95,75,#9c7b58,,2890,https://example.com/products/nordic-table,,oak;dining,TB-2001
+luna-bed-160,Luna bed 160,Beds,bed,,166,212,105,#c7b8a5,,3990,https://example.com/products/luna-bed,,double;linen,BD-3001
+milo-chair,Milo armchair (3D model),Armchairs,,models/milo-chair.glb,78,82,88,,,1990,https://example.com/products/milo-chair,thumbs/milo-chair.webp,velvet,AC-4001

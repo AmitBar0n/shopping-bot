@@ -23,7 +23,7 @@ button.primary:hover{filter:brightness(1.05)}
 button.danger{color:var(--danger)}
 button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 button:disabled{opacity:.45;cursor:default}
-input[type=number],input[type=text],select{border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;width:100%;min-width:0}
+input[type=number],input[type=text],input[type=search],select{border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;width:100%;min-width:0}
 input[type=number]{text-align:right}
 input[type=color]{border:1px solid var(--line);border-radius:7px;width:42px;height:30px;padding:2px;background:#fff}
 input[type=range]{width:100%}
@@ -55,9 +55,21 @@ aside.right{border-left:1px solid var(--line)}
 .tools button{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;font-size:12px}
 .tools button svg{width:18px;height:18px}
 .cat-title{font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:600}
+.catbar{display:grid;grid-template-columns:1fr 112px;gap:6px}
 .catalog{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.catalog button{text-align:left;padding:7px 8px;display:flex;flex-direction:column;gap:2px}
+.catalog button{text-align:left;padding:5px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.catalog .th{width:100%;aspect-ratio:4/3;border-radius:6px;background:#f3f1ec center/contain no-repeat;margin-bottom:3px}
+.catalog .nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .catalog button small{color:var(--muted);font-size:11px}
+.catalog .pr{font-size:11.5px;font-weight:600;color:var(--ink)}
+details.cat{border-bottom:1px solid var(--line)}
+details.cat summary{cursor:pointer;padding:8px 0;font-size:13px;font-weight:600;display:flex;justify-content:space-between;list-style:none}
+details.cat summary::-webkit-details-marker{display:none}
+details.cat summary::after{content:'▸';color:var(--muted)}
+details.cat[open] summary::after{content:'▾'}
+details.cat summary span{color:var(--muted);font-weight:400;margin-left:auto;margin-right:8px}
+details.cat .catalog{padding-bottom:10px}
+.plink{color:var(--accent);text-decoration:none;font-weight:600}
 .steps{margin:0;padding-left:18px;color:var(--muted);font-size:12.5px}
 .steps li{margin:3px 0}
 .steps li.done{color:var(--ok)}
@@ -190,7 +202,8 @@ aside.right{border-left:1px solid var(--line)}
 
       <div class="sec">
         <h3>Furniture</h3>
-        <input type="text" id="catSearch" placeholder="Search furniture…">
+        <div class="catbar"><input type="search" id="catSearch" placeholder="Search name, type, code…"><select id="catFilter" title="Category"></select></div>
+        <div class="muted" id="catCount" style="margin-top:6px"></div>
         <div id="catalog"></div>
         <div class="btnrow">
           <button id="btnModel" title="Import your own 3D model (.glb)">Import 3D model (.glb)</button>
@@ -275,6 +288,8 @@ aside.right{border-left:1px solid var(--line)}
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 /* ============================================================
    CONFIG
@@ -287,6 +302,8 @@ const CFG = Object.assign({
   products: [],            // [{id,name,category,w,d,h (cm),color,model:'url.glb',elev}]
   hideDefaultCatalog: false,
   showStartScreen: true,
+  catalogUrl: null,        // optional: 'catalog.json' or 'catalog.csv' (one row per product, see README)
+  currency: null,          // e.g. 'ILS', 'USD', 'EUR' - shows prices and a room total
 }, window.ROOMFIT_CONFIG || {});
 document.getElementById('brandTitle').textContent = CFG.title;
 if (CFG.accent) document.documentElement.style.setProperty('--accent', CFG.accent);
@@ -471,8 +488,40 @@ const DEFAULT_CATALOG = [
   { cat: 'Kitchen & bath', type: 'bathtub', name: 'Bathtub', w: 170, d: 75, h: 58, color: '#fafafa' },
   { cat: 'Custom', type: 'box', name: 'Custom box', w: 100, d: 50, h: 50, color: '#9aa5b1' },
 ];
-const CATALOG = [...(CFG.hideDefaultCatalog ? [] : DEFAULT_CATALOG),
-  ...CFG.products.map(p => ({ cat: p.category || 'Our products', type: p.model ? 'model' : (p.type || 'box'), ...p }))];
+const slug = t => String(t).toLowerCase().replace(/[^a-z0-9\u0590-\u05ff]+/g, '-').replace(/^-|-$/g, '');
+function normProduct(p) {
+  const n = k => (p[k] === '' || p[k] == null) ? undefined : +p[k];
+  const o = { ...p, cat: p.cat || p.category || 'Our products', name: p.name || p.id || 'Item', w: n('w') || 50, d: n('d') || 50, h: n('h') || 50, elev: n('elev') || 0, price: n('price'),
+    tags: Array.isArray(p.tags) ? p.tags : String(p.tags || '').split(/[;|]/).map(t => t.trim()).filter(Boolean) };
+  o.type = p.model ? 'model' : (p.type && BUILD_TYPES.includes(p.type) ? p.type : 'box');
+  o.id = p.id ? String(p.id) : slug(o.cat + '-' + o.name);
+  o.search = [o.name, o.cat, o.id, p.sku, o.type, ...o.tags].join(' ').toLowerCase();
+  return o;
+}
+const BUILD_TYPES = ['box', 'sofa', 'bed', 'table', 'roundtable', 'chair', 'desk', 'wardrobe', 'bookshelf', 'dresser', 'tvstand', 'tv', 'fridge', 'counter', 'washer', 'bathtub', 'rug', 'plant', 'lamp'];
+let CATALOG = [];
+function setCatalog(extra) { CATALOG = [...(CFG.hideDefaultCatalog ? [] : DEFAULT_CATALOG), ...CFG.products, ...extra].map(normProduct); }
+function parseCSV(text) {
+  const rows = []; let row = [], f = '', q = false; const first = text.split(/\r?\n/)[0], semi = !first.includes(',') && first.includes(';');
+  for (let i = 0; i < text.length; i++) { const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true; else if (semi ? c === ';' : c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(f); f = ''; if (row.some(x => x.trim())) rows.push(row); row = []; }
+    else f += c; }
+  row.push(f); if (row.some(x => x.trim())) rows.push(row);
+  const head = rows.shift().map(h => h.trim().toLowerCase());
+  return rows.map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] ?? '').trim()])));
+}
+async function loadCatalog() {
+  let extra = [];
+  if (CFG.catalogUrl) {
+    try { const res = await fetch(CFG.catalogUrl); if (!res.ok) throw new Error(res.status); const txt = await res.text();
+      extra = /\.csv(\?|$)/i.test(CFG.catalogUrl) || !/^\s*[\[{]/.test(txt) ? parseCSV(txt) : (j => Array.isArray(j) ? j : j.products || [])(JSON.parse(txt)); }
+    catch (e) { console.error('Catalogue', e); toast('Could not load the product catalogue.'); }
+  }
+  setCatalog(extra);
+}
+setCatalog([]);
 const FLAT_TYPES = new Set(['rug']);
 
 /* ============================================================
@@ -675,6 +724,7 @@ function buildRoom3D() {
 /* ---------- furniture objects ---------- */
 const itemObjs = new Map();  // id -> {grp, key, outline}
 const gltfLoader = new GLTFLoader(); const modelCache = new Map();
+{ const draco = new DRACOLoader(); draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/gltf/'); gltfLoader.setDRACOLoader(draco); gltfLoader.setMeshoptDecoder(MeshoptDecoder); }  // compressed .glb support
 function loadModel(url) { if (!modelCache.has(url)) modelCache.set(url, gltfLoader.loadAsync(url).then(g => g.scene)); return modelCache.get(url); }
 const itemKey = it => [it.type, it.w, it.d, it.h, it.color, it.model, it.rows].join('|');
 const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
@@ -1195,6 +1245,15 @@ function detectWalls() {
 function select(s, render = true) {
   sel = s; if (render) renderProps(); for (const i of state.items) placeItem3D(i); drawPlanSoon();
 }
+const productOf = it => it.pid ? CATALOG.find(c => c.id === it.pid) : null;
+function shoppingList() {
+  const rows = new Map();
+  for (const it of state.items) { const p = productOf(it); if (!p || p.price == null) continue; const r = rows.get(p.id) || { p, n: 0 }; r.n++; rows.set(p.id, r); }
+  if (!rows.size) return '';
+  const curs = new Set([...rows.values()].map(r => r.p.currency || CFG.currency || '')); const total = [...rows.values()].reduce((s2, r) => s2 + r.p.price * r.n, 0);
+  return `<div class="sec"><h3>In this room</h3>${[...rows.values()].map(r => `<div class="row"><label>${r.n > 1 ? r.n + ' × ' : ''}${r.p.url ? `<a class="plink" style="font-weight:400" href="${esc(r.p.url)}" target="_blank" rel="noopener">${esc(r.p.name)}</a>` : esc(r.p.name)}</label><span>${esc(money(r.p.price * r.n, r.p.currency))}</span></div>`).join('')}
+    ${curs.size === 1 ? `<div class="row" style="border-top:1px solid var(--line);padding-top:6px"><label><b style="color:var(--ink)">Total</b></label><b>${esc(money(total, [...curs][0]))}</b></div>` : ''}</div>`;
+}
 const numF = (label, key, valM, step = 1, extra = '') => `<div class="field">${label}<div class="inp"><input type="number" data-k="${key}" value="${toU(valM)}" step="${step}" ${extra}><span class="u">${U().s}</span></div></div>`;
 function renderProps() {
   const el = $('#props'); const o = findSel(); const S = state.settings;
@@ -1205,6 +1264,7 @@ function renderProps() {
         ${state.walls.length ? `<div class="muted">Outside size ≈ ${fmt(b.w)} × ${fmt(b.h)}</div><div class="muted">${state.walls.length} walls · ${state.openings.filter(o => o.type === 'door').length} doors · ${state.openings.filter(o => o.type === 'window').length} windows · ${state.items.length} items</div>` : '<div class="muted">No walls yet. Create a room on the left, or upload a floor plan.</div>'}
         ${nC ? `<div class="warn">⚠ ${nC} item${nC > 1 ? 's' : ''} collide with walls, doors or other furniture (red outline).</div>` : state.items.length ? '<div class="okmsg">✓ All furniture fits</div>' : ''}
       </div>
+      ${shoppingList()}
       <div class="sec"><h3>Settings</h3>
         <div class="row"><label>Units</label><select id="sUnits" style="width:50%"><option value="cm">Centimetres</option><option value="in">Inches</option></select></div>
         <div class="row"><label>Snap furniture to walls</label><input type="checkbox" id="sSnap" ${S.snapWalls ? 'checked' : ''}></div>
@@ -1232,6 +1292,7 @@ function renderProps() {
     el.innerHTML = `
       <div class="sec"><h3>Furniture</h3>
         <div class="field">Name<input type="text" data-k="name" value="${esc(it.name)}"></div>
+        ${(p => p && (p.price != null || p.url) ? `<div class="row" style="margin-top:8px">${p.price != null ? `<label>Price</label><b>${esc(money(p.price, p.currency))}</b>` : '<label></label>'}${p.url ? `<a class="plink" href="${esc(p.url)}" target="_blank" rel="noopener">View product ↗</a>` : ''}</div>` : '')(productOf(it))}
         <div class="grid3" style="margin-top:8px">${numF('Width', 'w', it.w)}${numF('Depth', 'd', it.d)}${numF('Height', 'h', it.h)}</div>
         <div class="grid2" style="margin-top:8px">${numF('Lift from floor', 'elev', it.elev || 0)}<div class="field">Rotation<div class="inp"><input type="number" data-k="rot" value="${Math.round(((deg(it.rot) % 360) + 360) % 360)}" step="5"><span class="u">°</span></div></div></div>
         <div class="grid2" style="margin-top:8px">${numF('Position X', 'x', it.x)}${numF('Position Y', 'y', it.y)}</div>
@@ -1323,21 +1384,68 @@ function duplicate() { const o = findSel(); if (!o || sel.kind !== 'item') retur
    ============================================================ */
 function addItem(entry) {
   const b = roomBounds();
-  const it = { id: uid(), type: entry.type, name: entry.name, w: entry.w / 100, d: entry.d / 100, h: entry.h / 100, color: entry.color || '#9aa5b1', elev: (entry.elev || 0) / 100, rot: 0, x: b.cx, y: b.cy, model: entry.model || null, rows: entry.rows };
+  const it = { id: uid(), type: entry.type, name: entry.name, w: entry.w / 100, d: entry.d / 100, h: entry.h / 100, color: entry.color || '#9aa5b1', elev: (entry.elev || 0) / 100, rot: 0, x: b.cx, y: b.cy, model: entry.model || null, rows: entry.rows, pid: entry.id || null };
   // find a free spot near the centre
   pushUndo(); state.items.push(it);
-  if (!FLAT_TYPES.has(it.type)) { computeConflicts(); const R0 = 0.25; outer: for (let r = 0; r < 6 && conflicts.has(it.id); r++) for (let a = 0; a < 8; a++) { it.x = b.cx + Math.cos(a * Math.PI / 4) * r * R0 * 2; it.y = b.cy + Math.sin(a * Math.PI / 4) * r * R0 * 2; computeConflicts(); if (!conflicts.has(it.id)) break outer; } }
+  if (!FLAT_TYPES.has(it.type)) { computeConflicts(); const R0 = 0.25; outer: for (let r = 0; r < 6 && conflicts.has(it.id); r++) for (let a = 0; a < 8; a++) { it.x = b.cx + Math.cos(a * Math.PI / 4) * r * R0 * 2; it.y = b.cy + Math.sin(a * Math.PI / 4) * r * R0 * 2; computeConflicts(); if (!conflicts.has(it.id)) break outer; } if (conflicts.has(it.id)) { it.x = b.cx; it.y = b.cy; snapItem(it); computeConflicts(); } }
   sel = { kind: 'item', id: it.id }; changed({ items: true, props: true });
   if ($('#stage').classList.contains('m-plan')) setView('split');
   return it;
 }
+/* ---------- catalogue list (built for hundreds of items) ---------- */
+const openCats = new Set(); let catsInit = false;
+function money(v, cur) { cur = cur || CFG.currency; if (v == null || isNaN(v)) return ''; try { return cur ? new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(v) : String(v); } catch (e) { return v + ' ' + cur; } }
+function catCard(c) {
+  const f = UNITS[state.settings.units], i = CATALOG.indexOf(c);
+  const th = c.thumb ? `style="background-image:url('${encodeURI(c.thumb)}')"` : (thumbCache.has(thumbKey(c)) ? `style="background-image:url(${thumbCache.get(thumbKey(c))})"` : `data-th="${i}"`);
+  return `<button data-i="${i}" title="Add ${esc(c.name)}"><span class="th" ${th}></span><span class="nm">${esc(c.name)}</span><small>${Math.round(c.w / 100 * f.f)}×${Math.round(c.d / 100 * f.f)}×${Math.round(c.h / 100 * f.f)} ${f.s}</small>${c.price != null ? `<span class="pr">${esc(money(c.price, c.currency))}</span>` : ''}</button>`;
+}
 function renderCatalog() {
-  const q = $('#catSearch').value.trim().toLowerCase(); const el = $('#catalog'); let html = '', last = null;
-  const list = CATALOG.filter(c => !q || (c.name + ' ' + c.cat).toLowerCase().includes(q));
-  const cats = [...new Set(list.map(c => c.cat))];
-  for (const cat of cats) { html += `<div class="cat-title">${esc(cat)}</div><div class="catalog">`; list.forEach((c, i) => { if (c.cat !== cat) return; const f = UNITS[state.settings.units]; html += `<button data-i="${CATALOG.indexOf(c)}" title="Add ${esc(c.name)}">${esc(c.name)}<small>${Math.round(c.w / 100 * f.f)}×${Math.round(c.d / 100 * f.f)}×${Math.round(c.h / 100 * f.f)} ${f.s}</small></button>`; }); html += '</div>'; }
-  el.innerHTML = html || '<div class="muted" style="margin-top:8px">Nothing found.</div>';
-  $$('button[data-i]', el).forEach(b => b.onclick = () => addItem(CATALOG[+b.dataset.i]));
+  const q = $('#catSearch').value.trim().toLowerCase(), words = q.split(/\s+/).filter(Boolean), sel_ = $('#catFilter');
+  const cats = [...new Set(CATALOG.map(c => c.cat))];
+  if (!catsInit || sel_.options.length !== cats.length + 1) { const cur = sel_.value; sel_.innerHTML = `<option value="">All (${CATALOG.length})</option>` + cats.map(c => `<option value="${esc(c)}">${esc(c)} (${CATALOG.filter(x => x.cat === c).length})</option>`).join(''); sel_.value = cats.includes(cur) ? cur : ''; if (!catsInit && cats.length) openCats.add(cats[0]); catsInit = true; }
+  const cf = sel_.value;
+  const list = CATALOG.filter(c => (!cf || c.cat === cf) && words.every(w => c.search.includes(w)));
+  const el = $('#catalog'); let html = '';
+  if (q || cf) html = `<div class="catalog" style="margin-top:8px">${list.map(catCard).join('')}</div>`;
+  else for (const cat of cats) { const items = list.filter(c => c.cat === cat); html += `<details class="cat" data-cat="${esc(cat)}" ${openCats.has(cat) ? 'open' : ''}><summary>${esc(cat)}<span>${items.length}</span></summary><div class="catalog">${openCats.has(cat) ? items.map(catCard).join('') : ''}</div></details>`; }
+  el.innerHTML = list.length ? html : '<div class="muted" style="margin-top:8px">Nothing found.</div>';
+  $('#catCount').textContent = (q || cf) ? `${list.length} of ${CATALOG.length} items` : `${CATALOG.length} items in ${cats.length} categories`;
+  $$('details.cat', el).forEach(d => d.addEventListener('toggle', () => { const cat = d.dataset.cat; if (d.open) { openCats.add(cat); const box = $('.catalog', d); if (!box.children.length) { box.innerHTML = list.filter(c => c.cat === cat).map(catCard).join(''); observeThumbs(box); } } else openCats.delete(cat); }));
+  observeThumbs(el);
+}
+$('#catalog').addEventListener('click', e => { const b = e.target.closest('button[data-i]'); if (b) addItem(CATALOG[+b.dataset.i]); });
+
+/* ---------- thumbnails: rendered on demand, only for cards that scroll into view ---------- */
+const thumbCache = new Map(), thumbQ = []; let thumbR = null, thumbBusy = false;
+const thumbKey = c => [c.type, c.model, c.w, c.d, c.h, c.color, c.rows].join('|');
+const thumbIO = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { thumbIO.unobserve(e.target); thumbQ.push(e.target); pumpThumbs(); } }), { rootMargin: '150px' });
+function observeThumbs(root) { $$('[data-th]', root).forEach(t => thumbIO.observe(t)); }
+function getThumbR() {
+  if (thumbR) return thumbR;
+  const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }); r.setSize(240, 180, false); r.outputColorSpace = THREE.SRGBColorSpace; r.toneMapping = THREE.ACESFilmicToneMapping;
+  const s = new THREE.Scene(); s.add(new THREE.HemisphereLight(0xffffff, 0x8a8070, 1.7)); const d = new THREE.DirectionalLight(0xffffff, 1.7); d.position.set(3, 5, 4); s.add(d);
+  return thumbR = { r, s, cam: new THREE.PerspectiveCamera(28, 4 / 3, 0.01, 200) };
+}
+async function pumpThumbs() {
+  if (thumbBusy) return; thumbBusy = true;
+  while (thumbQ.length) {
+    const el = thumbQ.shift(); if (!el.isConnected) continue; const c = CATALOG[+el.dataset.th]; if (!c) continue; const key = thumbKey(c);
+    if (!thumbCache.has(key)) {
+      try {
+        const { r, s, cam } = getThumbR(), g = new THREE.Group(); let shared = false;
+        if (c.type === 'model' && c.model) { const src = await loadModel(c.model); const m = src.clone(true); m.traverse(o => { if (o.isMesh) o.userData.shared = true; }); g.add(m); shared = true; }
+        else (BUILD[c.type] || BUILD.box)(g, c.w / 100, c.d / 100, c.h / 100, c.color || '#9aa5b1', c);
+        s.add(g); const bb = new THREE.Box3().setFromObject(g), sp_ = bb.getBoundingSphere(new THREE.Sphere());
+        const dir = new THREE.Vector3(0.9, 0.7, 1.5).normalize(), dist = sp_.radius / Math.sin(rad(cam.fov / 2)) * 1.02;
+        cam.position.copy(sp_.center).addScaledVector(dir, dist); cam.lookAt(sp_.center); cam.near = dist / 50; cam.far = dist * 4; cam.updateProjectionMatrix();
+        r.render(s, cam); thumbCache.set(key, r.domElement.toDataURL('image/webp', 0.85)); s.remove(g); if (!shared) disposeGroup(g);
+      } catch (e) { thumbCache.set(key, ''); }
+    }
+    const url = thumbCache.get(key); if (url) el.style.backgroundImage = `url(${url})`; el.removeAttribute('data-th');
+    await new Promise(res => setTimeout(res, 0));
+  }
+  thumbBusy = false;
 }
 async function importModel(file) {
   const url = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
@@ -1406,7 +1514,7 @@ $('#bpOpacity').oninput = e => { if (state.bg) { state.bg.opacity = +e.target.va
 $('#btnCalibrate').onclick = () => { setTool('calibrate'); };
 $('#btnDetect').onclick = detectWalls;
 $('#btnBpRemove').onclick = () => { pushUndo(); state.bg = null; bgImg = null; changed({ props: true }); };
-$('#catSearch').oninput = renderCatalog;
+$('#catSearch').oninput = renderCatalog; $('#catFilter').onchange = renderCatalog;
 $('#btnModel').onclick = () => $('#fileModel').click();
 $('#fileModel').onchange = e => { const f = e.target.files[0]; if (f) importModel(f); e.target.value = ''; };
 $('#btnExport').onclick = () => { const blob = new Blob([JSON.stringify({ app: 'roomfit3d', version: 1, ...state }, null, 1)], { type: 'application/json' }); download('my-room.json', URL.createObjectURL(blob)); };
@@ -1467,7 +1575,10 @@ changed({ room: true, items: true, props: true });
 requestAnimationFrame(() => { resize3D(); fitPlan(); setCam('orbit'); });
 const params = new URLSearchParams(location.search);
 const addParam = params.get('add');
-if (addParam) { const e = CATALOG.find(c => c.id === addParam || c.name === addParam); if (e) { if (!state.walls.length) createRect(4, 3.5, 2.6, 0.12); addItem(e); } }
+loadCatalog().then(() => {
+  renderCatalog(); if (!sel) renderProps();
+  if (addParam) { const e = CATALOG.find(c => c.id === addParam || c.sku === addParam || c.name === addParam); if (e) { closeModal(); if (!state.walls.length) createRect(4, 3.5, 2.6, 0.12); addItem(e); } else toast('Product not found: ' + addParam); }
+});
 if (!hadSaved && CFG.showStartScreen && !addParam) openModal();
 window.RoomFit = { state: () => state, addItem, createRect, sampleRoom, view: () => ({ z: P.z, ox: P.ox, oy: P.oy }) };   // small API for the host page
 </script>
